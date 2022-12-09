@@ -27,6 +27,7 @@
 #include "spawn_object.h"
 #include "spawn_sound.h"
 #include "puppylights.h"
+#include "plane_thing/model.inc.c"
 
 static s8 sLevelsWithRooms[] = { LEVEL_BBH, LEVEL_CASTLE, LEVEL_HMC, -1 };
 
@@ -2348,4 +2349,136 @@ void cur_obj_spawn_star_at_y_offset(f32 targetX, f32 targetY, f32 targetZ, f32 o
     o->oPosY += offsetY + gDebugInfo[DEBUG_PAGE_ENEMYINFO][0];
     spawn_default_star(targetX, targetY, targetZ);
     o->oPosY = objectPosY;
+}
+
+#define VERT_CULLING_RADIUS 30.0f
+
+s32 printDebug = FALSE;
+
+/**
+ * This function is nearly a copy of `obj_is_in_view` in rendering_graph_node.c,
+ * except it is hardcoded to use this specific culling radius and check for vertical bounds 
+ * 
+ * @param camPos position (already adjusted to be relative to the camera using linear_mtxf_mul_vec3f_and_translate with gCameraTransform)
+ * @param tHalfFovX tans of 
+ * @param tHalfFovY 
+ * @return s32 boolean if position is in view of the camera
+ */
+s32 pos_in_view(Vec3f camPos, f32 tHalfFovX, f32 tHalfFovY) {
+    // check if behind cam
+    if (camPos[2] > VERT_CULLING_RADIUS) return FALSE;
+
+    // check sides of screen
+    f32 hScreenEdge = -camPos[2] * tHalfFovX;
+    if (printDebug) osSyncPrintf("hScreenEdge  %f\ntHalfFovX  %f\n", hScreenEdge, tHalfFovX);
+    if (camPos[0] > hScreenEdge + VERT_CULLING_RADIUS) {
+        return FALSE;
+    }
+    if (camPos[0] < -hScreenEdge - VERT_CULLING_RADIUS) {
+        return FALSE;
+    }
+
+    // check vertical edges
+    f32 hScreenEdgeY = -camPos[2] * tHalfFovY;
+    if (printDebug) osSyncPrintf("hScreenEdgeY %f\ntHalfFovY %f\n", hScreenEdgeY, tHalfFovY);
+    if (camPos[1] > hScreenEdgeY + VERT_CULLING_RADIUS) {
+        return FALSE;
+    }
+    if (camPos[1] < -hScreenEdgeY - VERT_CULLING_RADIUS) {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+extern f32 sAspectRatio;
+
+Gfx *geo_funny_plane(s32 callContext, struct GraphNode *node, UNUSED Mat4 mtx) {
+    struct GraphNodeGenerated *currentGraphNode;
+    Gfx *dlStart, *dlHead;
+    dlStart = NULL;
+    int len = 281;
+    static int firstRender = TRUE;
+
+    /**
+     * vtx.n.flag is used to track whether or not the vertex was on screen the last frame
+     * if that is TRUE but the vert is not on screen during the current frame,
+     * then flip the alpha value to the opposite (e.g. 255 OR 0)
+     * the combiner is set up like this:
+     * 
+     * 	gsDPSetCombineLERP(
+        // Color cycle 1: Lerp between prim color and shade color so they stand out more
+            PRIMITIVE, SHADE, SHADE_ALPHA, SHADE,
+
+        // Alpha cycle 1: Lerp between texel0 and texel1
+            TEXEL0, TEXEL1, SHADE, TEXEL1,
+
+        // Color cycle 2: Multiply C1 by A1, gives us our texture color mixed with our prim/shade colors 
+            COMBINED, 0, COMBINED_ALPHA, 0,
+
+        // Alpha cycle 2: Not relevant 
+            0, 0, 0, 1
+	    ),
+     *   
+     * source model can be seen in "src/game/plane_thing/model.inc.c"  
+     */
+
+    if (callContext == GEO_CONTEXT_CREATE || (gPlayer1Controller->buttonPressed & L_TRIG)) {
+        // reset everything to be "offscreen"
+        for (int i = 0; i < len; i++) {
+            plane_thing_Plane_mesh_vtx_0[i].n.a = 255;
+            plane_thing_Plane_mesh_vtx_0[i].n.flag = TRUE;
+        }
+    } else if (callContext == GEO_CONTEXT_RENDER) {
+        currentGraphNode = (struct GraphNodeGenerated *) node;
+        SET_GRAPH_NODE_LAYER(currentGraphNode->fnNode.node.flags, LAYER_OPAQUE);
+
+        s16 halfFovX = (((((gCurGraphNodeCamFrustum->fov * sAspectRatio) / 2.0f) + 1.0f) * 32768.0f) / 180.0f) + 0.5f;
+        s16 halfFovY = (((((gCurGraphNodeCamFrustum->fov) / 2.0f) + 1.0f) * 32768.0f) / 180.0f) + 0.5f;
+        f32 tHalfFovX = tans(halfFovX);
+        f32 tHalfFovY = tans(halfFovY);
+
+        for (int i = 0; i < len; i++) {
+            // Using UNFLoader, I was able to inspect the values of a specific vert (bottom left)
+            // printDebug = i == 2;
+
+            Vec3f pos, cpy;
+            // Vec3f needed for conversions
+            vec3s_to_vec3f(pos, plane_thing_Plane_mesh_vtx_0[i].n.ob);
+            // Making a copy so that the source position isnt modified during the math in linear_mtxf_mul_vec3f_and_translate
+            vec3f_copy(cpy, pos);
+            // Go from world position to be relative to camera space
+            linear_mtxf_mul_vec3f_and_translate(gCameraTransform, pos, cpy);
+
+            if (printDebug) osSyncPrintf("%4.4f %4.4f %4.4f\n", pos[0], pos[1], pos[2]);
+
+            // check if vert is on screen
+            s32 isInView = pos_in_view(pos, tHalfFovX, tHalfFovY);
+            // the first render should decide the initial alpha value, unimportant here but may be in a different scenario
+            if (firstRender) {
+                plane_thing_Plane_mesh_vtx_0[i].n.a = isInView
+                    ? 255
+                    : 0;
+            // if vertex was in view, and now it isnt...
+            } else if (plane_thing_Plane_mesh_vtx_0[i].n.flag && !isInView) {
+                if (printDebug) osSyncPrintf("not in view anymore!\n");
+                // set alpha to the opposite value that it was before
+                plane_thing_Plane_mesh_vtx_0[i].n.a = plane_thing_Plane_mesh_vtx_0[i].n.a
+                    ? 0
+                    : 255;
+            }
+
+            // constantly track whether it was in view or not
+            plane_thing_Plane_mesh_vtx_0[i].n.flag = isInView;
+            if (printDebug) osSyncPrintf("%d | %d\n", plane_thing_Plane_mesh_vtx_0[i].n.a, plane_thing_Plane_mesh_vtx_0[i].n.flag);
+        }
+        firstRender = FALSE;
+
+        dlStart = alloc_display_list(sizeof(Gfx) * 2);
+        dlHead = dlStart;
+        gSPDisplayList(dlHead++, plane_thing_Plane_mesh);
+        gSPEndDisplayList(dlHead);
+    }
+
+    return dlStart;
 }
