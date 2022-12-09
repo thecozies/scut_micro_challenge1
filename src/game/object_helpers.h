@@ -270,5 +270,6 @@ s32 cur_obj_check_interacted(void);
 void cur_obj_spawn_loot_blue_coin(void);
 
 void cur_obj_spawn_star_at_y_offset(f32 targetX, f32 targetY, f32 targetZ, f32 offsetY);
+Gfx *geo_funny_plane(s32 callContext, struct GraphNode *node, UNUSED Mat4 mtx);
 
 #endif // OBJECT_HELPERS_H

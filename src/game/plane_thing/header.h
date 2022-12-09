@@ -1,0 +1,9 @@
+extern Lights1 plane_thing_f3dlite_material_001_lights;
+extern u64 plane_thing_accent_wall128_i4[];
+extern u64 plane_thing_brick__i4[];
+extern Vtx plane_thing_Plane_mesh_vtx_cull[8];
+extern Vtx plane_thing_Plane_mesh_vtx_0[281];
+extern Gfx plane_thing_Plane_mesh_tri_0[];
+extern Gfx mat_plane_thing_f3dlite_material_001[];
+extern Gfx mat_revert_plane_thing_f3dlite_material_001[];
+extern Gfx plane_thing_Plane_mesh[];
